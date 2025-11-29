@@ -45,16 +45,17 @@ def train_model():
 
             centers, half_sizes = model(batch)  # (B, K, 3), (B, K, 3)
 
-            # Sample predicted points from cuboids
+            # # Sample predicted points from cuboids
             pred_points = sample_points_from_cuboids(
                 centers, half_sizes, num_samples_per_shape=NUM_POINTS
             )  # (B, N, 3)
+
 
             # Chamfer distance between predicted and ground truth
             loss_recon = chamfer_distance(pred_points, batch)
 
             # Simple regularization to avoid very large cuboids
-            size_reg = torch.mean(half_sizes)
+            size_reg = torch.mean(half_sizes**2)
 
             loss = loss_recon + 0.0001 * size_reg
 

@@ -67,80 +67,181 @@ def sample_points_from_cuboids(centers, half_sizes, num_samples_per_shape=NUM_PO
 
     return pts
 
+# def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
+#     device = centers.device
+#     B, K, _ = centers.shape
+#     samples_per_prim = max(1, num_samples_per_shape // K)
+
+#     all_pts = []
+
+#     for b in range(B):
+#         c = centers[b]      # (K, 3)
+#         s = half_sizes[b]   # (K, 3)
+
+#         pts_list = []
+#         for k in range(K):
+#             ck = c[k]   # (3,)
+#             sk = s[k]   # (3,)
+
+#             # random faces: 0..5
+#             face_ids = torch.randint(0, 6, (samples_per_prim,), device=device)
+
+#             u = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[0]
+#             v = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[1]
+#             w = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[2]
+
+#             x = torch.zeros(samples_per_prim, device=device)
+#             y = torch.zeros(samples_per_prim, device=device)
+#             z = torch.zeros(samples_per_prim, device=device)
+
+#             # assign coordinates based on face
+#             # +x / -x
+#             mask = face_ids == 0
+#             x[mask] = sk[0]
+#             y[mask] = v[mask]
+#             z[mask] = w[mask]
+
+#             mask = face_ids == 1
+#             x[mask] = -sk[0]
+#             y[mask] = v[mask]
+#             z[mask] = w[mask]
+
+#             # +y / -y
+#             mask = face_ids == 2
+#             x[mask] = u[mask]
+#             y[mask] = sk[1]
+#             z[mask] = w[mask]
+
+#             mask = face_ids == 3
+#             x[mask] = u[mask]
+#             y[mask] = -sk[1]
+#             z[mask] = w[mask]
+
+#             # +z / -z
+#             mask = face_ids == 4
+#             x[mask] = u[mask]
+#             y[mask] = v[mask]
+#             z[mask] = sk[2]
+
+#             mask = face_ids == 5
+#             x[mask] = u[mask]
+#             y[mask] = v[mask]
+#             z[mask] = -sk[2]
+
+#             pts = torch.stack([x, y, z], dim=-1) + ck  # (S, 3)
+#             pts_list.append(pts)
+
+#         pts_cat = torch.cat(pts_list, dim=0)  # (K*S, 3)
+#         if pts_cat.shape[0] >= num_samples_per_shape:
+#             pts_cat = pts_cat[:num_samples_per_shape]
+#         else:
+#             reps = (num_samples_per_shape + pts_cat.shape[0] - 1) // pts_cat.shape[0]
+#             pts_cat = pts_cat.repeat(reps, 1)[:num_samples_per_shape]
+#         all_pts.append(pts_cat)
+
+#     all_pts = torch.stack(all_pts, dim=0)  # (B, N, 3)
+#     return all_pts
+
+##version2
 def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
+    """
+    centers:    (B, K, 3)
+    half_sizes: (B, K, 3)
+    returns:    (B, num_samples_per_shape, 3)
+    """
     device = centers.device
+    dtype = centers.dtype
     B, K, _ = centers.shape
+
+    # Number of samples per primitive (like in your original code)
     samples_per_prim = max(1, num_samples_per_shape // K)
+    S = samples_per_prim  # just a shorter name
 
-    all_pts = []
+    # (B, K, S) – random face index for each (batch, primitive, sample)
+    face_ids = torch.randint(0, 6, (B, K, S), device=device)
 
-    for b in range(B):
-        c = centers[b]      # (K, 3)
-        s = half_sizes[b]   # (K, 3)
+    # Half-sizes: (B, K, 1) so we can broadcast to S
+    sx = half_sizes[..., 0:1]  # (B, K, 1)
+    sy = half_sizes[..., 1:2]  # (B, K, 1)
+    sz = half_sizes[..., 2:3]  # (B, K, 1)
 
-        pts_list = []
-        for k in range(K):
-            ck = c[k]   # (3,)
-            sk = s[k]   # (3,)
+    # Random coordinates in [-1, 1], then scaled by the half-sizes
+    u = (2 * torch.rand(B, K, S, device=device, dtype=dtype) - 1)
+    v = (2 * torch.rand(B, K, S, device=device, dtype=dtype) - 1)
+    w = (2 * torch.rand(B, K, S, device=device, dtype=dtype) - 1)
 
-            # random faces: 0..5
-            face_ids = torch.randint(0, 6, (samples_per_prim,), device=device)
+    # Expand half-sizes to match (B, K, S)
+    sx_exp = sx.expand(-1, -1, S)
+    sy_exp = sy.expand(-1, -1, S)
+    sz_exp = sz.expand(-1, -1, S)
 
-            u = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[0]
-            v = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[1]
-            w = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[2]
+    # Scale u, v, w the same way as in your original CPU code
+    u = u * sx_exp
+    v = v * sy_exp
+    w = w * sz_exp
 
-            x = torch.zeros(samples_per_prim, device=device)
-            y = torch.zeros(samples_per_prim, device=device)
-            z = torch.zeros(samples_per_prim, device=device)
+    # Local coordinates on each face
+    x = torch.zeros(B, K, S, device=device, dtype=dtype)
+    y = torch.zeros(B, K, S, device=device, dtype=dtype)
+    z = torch.zeros(B, K, S, device=device, dtype=dtype)
 
-            # assign coordinates based on face
-            # +x / -x
-            mask = face_ids == 0
-            x[mask] = sk[0]
-            y[mask] = v[mask]
-            z[mask] = w[mask]
+    # Masks for each face
+    m0 = face_ids == 0  # +x
+    m1 = face_ids == 1  # -x
+    m2 = face_ids == 2  # +y
+    m3 = face_ids == 3  # -y
+    m4 = face_ids == 4  # +z
+    m5 = face_ids == 5  # -z
 
-            mask = face_ids == 1
-            x[mask] = -sk[0]
-            y[mask] = v[mask]
-            z[mask] = w[mask]
+    # +x face
+    x[m0] = sx_exp[m0]
+    y[m0] = v[m0]
+    z[m0] = w[m0]
 
-            # +y / -y
-            mask = face_ids == 2
-            x[mask] = u[mask]
-            y[mask] = sk[1]
-            z[mask] = w[mask]
+    # -x face
+    x[m1] = -sx_exp[m1]
+    y[m1] = v[m1]
+    z[m1] = w[m1]
 
-            mask = face_ids == 3
-            x[mask] = u[mask]
-            y[mask] = -sk[1]
-            z[mask] = w[mask]
+    # +y face
+    x[m2] = u[m2]
+    y[m2] = sy_exp[m2]
+    z[m2] = w[m2]
 
-            # +z / -z
-            mask = face_ids == 4
-            x[mask] = u[mask]
-            y[mask] = v[mask]
-            z[mask] = sk[2]
+    # -y face
+    x[m3] = u[m3]
+    y[m3] = -sy_exp[m3]
+    z[m3] = w[m3]
 
-            mask = face_ids == 5
-            x[mask] = u[mask]
-            y[mask] = v[mask]
-            z[mask] = -sk[2]
+    # +z face
+    x[m4] = u[m4]
+    y[m4] = v[m4]
+    z[m4] = sz_exp[m4]
 
-            pts = torch.stack([x, y, z], dim=-1) + ck  # (S, 3)
-            pts_list.append(pts)
+    # -z face
+    x[m5] = u[m5]
+    y[m5] = v[m5]
+    z[m5] = -sz_exp[m5]
 
-        pts_cat = torch.cat(pts_list, dim=0)  # (K*S, 3)
-        if pts_cat.shape[0] >= num_samples_per_shape:
-            pts_cat = pts_cat[:num_samples_per_shape]
-        else:
-            reps = (num_samples_per_shape + pts_cat.shape[0] - 1) // pts_cat.shape[0]
-            pts_cat = pts_cat.repeat(reps, 1)[:num_samples_per_shape]
-        all_pts.append(pts_cat)
+    # Stack into (B, K, S, 3)
+    pts = torch.stack([x, y, z], dim=-1)
 
-    all_pts = torch.stack(all_pts, dim=0)  # (B, N, 3)
-    return all_pts
+    # Move to world coordinates: centers is (B, K, 3) → (B, K, 1, 3)
+    pts = pts + centers.unsqueeze(2)
+
+    # Flatten per batch: (B, K*S, 3)
+    pts = pts.view(B, K * S, 3)
+
+    # Match num_samples_per_shape exactly, like your original code
+    total_per_batch = K * S
+    if total_per_batch >= num_samples_per_shape:
+        pts = pts[:, :num_samples_per_shape, :]
+    else:
+        reps = (num_samples_per_shape + total_per_batch - 1) // total_per_batch
+        pts = pts.repeat(1, reps, 1)[:, :num_samples_per_shape, :]
+
+    return pts
+
 
 def cuboids_to_mesh(centers, half_sizes):
     """

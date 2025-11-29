@@ -10,15 +10,15 @@ CHECKPOINT_PATH = "checkpoints/pointnet_primitives.pth"
 OUTPUT_DIR = "outputs"
 
 # Data
-NUM_POINTS = 2048            # number of points sampled per shape
+NUM_POINTS = 4096            # number of points sampled per shape
 
 # Model
-NUM_PRIMITIVES = 32           # number of cuboids per shape
+NUM_PRIMITIVES = 64           # number of cuboids per shape
 FEATURE_DIM = 256            # PointNet global feature size
 
 # Training
 BATCH_SIZE = 1
-NUM_EPOCHS = 500
+NUM_EPOCHS = 2500
 LEARNING_RATE = 5e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
