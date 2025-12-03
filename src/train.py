@@ -17,7 +17,11 @@ from config import (
 )
 from dataset import ShapePrimitiveDataset
 from model import PointNetPrimitiveModel
-from utils import chamfer_distance, sample_points_from_cuboids_surface as sample_points_from_cuboids
+from utils import (
+    chamfer_distance, 
+    sample_points_from_cuboids_surface as sample_points_from_cuboids,
+    cuboid_overlap_loss,                  # NEW
+)
 
 
 def train_model():
@@ -57,7 +61,9 @@ def train_model():
             # Simple regularization to avoid very large cuboids
             size_reg = torch.mean(half_sizes**2)
 
-            loss = loss_recon + 0.0001 * size_reg
+            loss_overlap = cuboid_overlap_loss(centers, half_sizes)
+
+            loss = 0.01 * loss_recon + 0.0001 * size_reg + 0.01 * loss_overlap
 
             loss.backward()
             optimizer.step()
