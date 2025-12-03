@@ -13,168 +13,182 @@ def chamfer_distance(pcd1, pcd2):
     pcd2: (B, M, 3)
     Returns scalar Chamfer distance over the batch.
     """
+    assert pcd1.dim() == 3 and pcd2.dim() == 3
     B, N, _ = pcd1.shape
-    _, M, _ = pcd2.shape
+    B2, M, _ = pcd2.shape
+    assert B == B2, "pcd1 and pcd2 must have same batch size"
 
-    # (B, N, 1, 3) and (B, 1, M, 3) -> (B, N, M, 3)
+    # (B, N, 1, 3) - (B, 1, M, 3) -> (B, N, M, 3)
     diff = pcd1.unsqueeze(2) - pcd2.unsqueeze(1)
-    dist_sq = torch.sum(diff ** 2, dim=3)  # (B, N, M)
+    dist_sq = torch.sum(diff ** 2, dim=-1)  # (B, N, M)
 
-    # For each point in pcd1, find nearest in pcd2
     min_dist1, _ = torch.min(dist_sq, dim=2)  # (B, N)
-    # For each point in pcd2, find nearest in pcd1
     min_dist2, _ = torch.min(dist_sq, dim=1)  # (B, M)
 
     loss = torch.mean(min_dist1) + torch.mean(min_dist2)
     return loss
 
 
-def sample_points_from_cuboids(centers, half_sizes, num_samples_per_shape=NUM_POINTS):
+def sample_points_from_cuboids(
+    centers, half_sizes, num_samples_per_shape=NUM_POINTS, surface_only=True
+):
     """
-    Differentiable sampling of points inside cuboids.
+    Sample points on or in predicted cuboids.
 
     centers:    (B, K, 3)
     half_sizes: (B, K, 3)
-    num_samples_per_shape: int
-
-    Returns:
-        pcd_pred: (B, num_samples_per_shape, 3)
+    Returns pcd_pred: (B, num_samples_per_shape, 3)
     """
     device = centers.device
     B, K, _ = centers.shape
-
-    samples_per_primitive = max(1, num_samples_per_shape // K)
-
-    # (B, K, samples_per_primitive, 3) random in [-1, 1]
-    rand = 2.0 * torch.rand(B, K, samples_per_primitive, 3, device=device) - 1.0
-
-    # scale by half sizes and shift by centers
-    centers_exp = centers.unsqueeze(2)         # (B, K, 1, 3)
-    sizes_exp = half_sizes.unsqueeze(2)        # (B, K, 1, 3)
-
-    pts = rand * sizes_exp + centers_exp      # (B, K, S, 3)
-
-    pts = pts.view(B, K * samples_per_primitive, 3)  # (B, K*S, 3)
-
-    if K * samples_per_primitive >= num_samples_per_shape:
-        # take first num_samples_per_shape points
-        pts = pts[:, :num_samples_per_shape, :]
-    else:
-        # pad by repeating
-        repeat_factor = (num_samples_per_shape + K * samples_per_primitive - 1) // (K * samples_per_primitive)
-        pts_expanded = pts.repeat(1, repeat_factor, 1)
-        pts = pts_expanded[:, :num_samples_per_shape, :]
-
-    return pts
-
-def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
-    device = centers.device
-    B, K, _ = centers.shape
-    samples_per_prim = max(1, num_samples_per_shape // K)
+    samples_per_prim = max(1, num_samples_per_shape // max(1, K))
 
     all_pts = []
-
     for b in range(B):
-        c = centers[b]      # (K, 3)
-        s = half_sizes[b]   # (K, 3)
-
-        pts_list = []
+        cb = centers[b]      # (K, 3)
+        sb = half_sizes[b]   # (K, 3)
+        pts_b = []
         for k in range(K):
-            ck = c[k]   # (3,)
-            sk = s[k]   # (3,)
+            c = cb[k]        # (3,)
+            s = sb[k].clamp(min=1e-4)  # avoid degenerate
 
-            # random faces: 0..5
-            face_ids = torch.randint(0, 6, (samples_per_prim,), device=device)
+            if surface_only:
+                # sample faces uniformly: pick faces, then (u,v) on face
+                n = samples_per_prim
+                # choose faces: 0:+x,1:-x,2:+y,3:-y,4:+z,5:-z
+                face_ids = torch.randint(0, 6, (n,), device=device)
+                u = torch.rand(n, device=device)
+                v = torch.rand(n, device=device)
+                u = (u - 0.5) * 2.0
+                v = (v - 0.5) * 2.0
 
-            u = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[0]
-            v = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[1]
-            w = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[2]
+                x = torch.zeros(n, device=device)
+                y = torch.zeros(n, device=device)
+                z = torch.zeros(n, device=device)
 
-            x = torch.zeros(samples_per_prim, device=device)
-            y = torch.zeros(samples_per_prim, device=device)
-            z = torch.zeros(samples_per_prim, device=device)
+                # +x / -x
+                mask = face_ids == 0
+                x[mask] = s[0]
+                y[mask] = u[mask] * s[1]
+                z[mask] = v[mask] * s[2]
 
-            # assign coordinates based on face
-            # +x / -x
-            mask = face_ids == 0
-            x[mask] = sk[0]
-            y[mask] = v[mask]
-            z[mask] = w[mask]
+                mask = face_ids == 1
+                x[mask] = -s[0]
+                y[mask] = u[mask] * s[1]
+                z[mask] = v[mask] * s[2]
 
-            mask = face_ids == 1
-            x[mask] = -sk[0]
-            y[mask] = v[mask]
-            z[mask] = w[mask]
+                # +y / -y
+                mask = face_ids == 2
+                x[mask] = u[mask] * s[0]
+                y[mask] = s[1]
+                z[mask] = v[mask] * s[2]
 
-            # +y / -y
-            mask = face_ids == 2
-            x[mask] = u[mask]
-            y[mask] = sk[1]
-            z[mask] = w[mask]
+                mask = face_ids == 3
+                x[mask] = u[mask] * s[0]
+                y[mask] = -s[1]
+                z[mask] = v[mask] * s[2]
 
-            mask = face_ids == 3
-            x[mask] = u[mask]
-            y[mask] = -sk[1]
-            z[mask] = w[mask]
+                # +z / -z
+                mask = face_ids == 4
+                x[mask] = u[mask] * s[0]
+                y[mask] = v[mask] * s[1]
+                z[mask] = s[2]
 
-            # +z / -z
-            mask = face_ids == 4
-            x[mask] = u[mask]
-            y[mask] = v[mask]
-            z[mask] = sk[2]
+                mask = face_ids == 5
+                x[mask] = u[mask] * s[0]
+                y[mask] = v[mask] * s[1]
+                z[mask] = -s[2]
 
-            mask = face_ids == 5
-            x[mask] = u[mask]
-            y[mask] = v[mask]
-            z[mask] = -sk[2]
+                pts = torch.stack([x, y, z], dim=-1) + c  # (n,3)
+            else:
+                # uniform inside box
+                n = samples_per_prim
+                r = torch.rand(n, 3, device=device) * 2.0 - 1.0  # [-1,1]
+                pts = c + r * s
 
-            pts = torch.stack([x, y, z], dim=-1) + ck  # (S, 3)
-            pts_list.append(pts)
+            pts_b.append(pts)
+        pts_b = torch.cat(pts_b, dim=0)  # (K * n, 3)
 
-        pts_cat = torch.cat(pts_list, dim=0)  # (K*S, 3)
-        if pts_cat.shape[0] >= num_samples_per_shape:
-            pts_cat = pts_cat[:num_samples_per_shape]
+        # adjust count to num_samples_per_shape
+        total = pts_b.shape[0]
+        if total >= num_samples_per_shape:
+            idx = torch.randperm(total, device=device)[:num_samples_per_shape]
+            pts_b = pts_b[idx]
         else:
-            reps = (num_samples_per_shape + pts_cat.shape[0] - 1) // pts_cat.shape[0]
-            pts_cat = pts_cat.repeat(reps, 1)[:num_samples_per_shape]
-        all_pts.append(pts_cat)
+            # repeat to fill
+            repeat = (num_samples_per_shape + total - 1) // total
+            pts_b = pts_b.repeat(repeat, 1)[:num_samples_per_shape]
+        all_pts.append(pts_b)
+    pcd_pred = torch.stack(all_pts, dim=0)  # (B, num_samples_per_shape, 3)
+    return pcd_pred
 
-    all_pts = torch.stack(all_pts, dim=0)  # (B, N, 3)
-    return all_pts
+
+def box_sdf(points, centers, half_sizes):
+    """
+    Compute signed distance from points to axis-aligned boxes.
+
+    points:     (B, N, 3)
+    centers:    (B, K, 3)
+    half_sizes: (B, K, 3)
+    Returns:    (B, N, K) distances
+    """
+    # expand dims for broadcasting
+    p = points.unsqueeze(2)      # (B,N,1,3)
+    c = centers.unsqueeze(1)     # (B,1,K,3)
+    s = half_sizes.unsqueeze(1)  # (B,1,K,3)
+
+    # |x - c| - s
+    q = torch.abs(p - c) - s     # (B,N,K,3)
+    d = q.max(dim=-1).values     # (B,N,K)
+    return d
+
+
+def union_sdf(points, centers, half_sizes):
+    """
+    SDF of union of cuboids: min over individual box SDFs.
+
+    points:     (B, N, 3)
+    centers:    (B, K, 3)
+    half_sizes: (B, K, 3)
+    Returns:    (B, N)
+    """
+    d_all = box_sdf(points, centers, half_sizes)  # (B,N,K)
+    d_union, _ = d_all.min(dim=-1)               # (B,N)
+    return d_union
+
 
 def cuboids_to_mesh(centers, half_sizes):
     """
-    centers: (K, 3) numpy
-    half_sizes: (K, 3) numpy
-    Returns a single Open3D TriangleMesh with all cuboids combined.
+    Convert cuboid parameters to a single Open3D TriangleMesh.
+
+    centers:    (K, 3) numpy array or torch tensor
+    half_sizes: (K, 3) numpy array or torch tensor
     """
-    all_meshes = []
+    if isinstance(centers, torch.Tensor):
+        centers = centers.detach().cpu().numpy()
+    if isinstance(half_sizes, torch.Tensor):
+        half_sizes = half_sizes.detach().cpu().numpy()
 
-    for k in range(centers.shape[0]):
-        c = centers[k]       # (3,)
-        s = half_sizes[k]    # (3,)
+    K = centers.shape[0]
+    meshes = []
 
-        # Box dimensions are full sizes = 2 * half_sizes
+    for k in range(K):
+        c = centers[k]
+        s = np.abs(half_sizes[k])
         w, h, d = 2 * s[0], 2 * s[1], 2 * s[2]
 
-        # Create box with one corner at (0, 0, 0)
+        if w <= 0 or h <= 0 or d <= 0:
+            continue
+
         box = o3d.geometry.TriangleMesh.create_box(width=w, height=h, depth=d)
+        box.translate(c - np.array([w / 2.0, h / 2.0, d / 2.0]))
+        box.paint_uniform_color(np.random.rand(3))
+        meshes.append(box)
 
-        # Move box so its center is at (cx, cy, cz)
-        # Default box center is at (w/2, h/2, d/2)
-        box.translate(c - np.array([w / 2, h / 2, d / 2]))
-
-        # Optional: set a uniform color
-        box.paint_uniform_color(np.random.rand(3))  # random color per cuboid
-
-        all_meshes.append(box)
-
-    # Combine all cuboids into one mesh
-    if len(all_meshes) == 0:
+    if not meshes:
         return None
 
-    combined = all_meshes[0]
-    for m in all_meshes[1:]:
-        combined += m
-
-    return combined
+    mesh = meshes[0]
+    for m in meshes[1:]:
+        mesh += m
+    return mesh

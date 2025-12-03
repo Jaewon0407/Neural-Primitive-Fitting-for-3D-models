@@ -2,6 +2,7 @@
 
 import os
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -9,54 +10,73 @@ from config import (
     DATA_ROOT,
     NUM_POINTS,
     NUM_PRIMITIVES,
+    NUM_SDF_POINTS,
     BATCH_SIZE,
     NUM_EPOCHS,
     LEARNING_RATE,
     DEVICE,
     CHECKPOINT_PATH,
+    W_CHAMFER,
+    W_SDF,
+    W_SIZE,
 )
 from dataset import ShapePrimitiveDataset
 from model import PointNetPrimitiveModel
-from utils import chamfer_distance, sample_points_from_cuboids_surface as sample_points_from_cuboids
+from utils import chamfer_distance, sample_points_from_cuboids, union_sdf
 
 
 def train_model():
-    # Dataset and dataloader
-    dataset = ShapePrimitiveDataset(DATA_ROOT, num_points=NUM_POINTS)
-    dataloader = DataLoader(dataset,
-                            batch_size=BATCH_SIZE,
-                            shuffle=True,
-                            drop_last=True)
+    # Dataset and loader
+    dataset = ShapePrimitiveDataset(
+        root=DATA_ROOT,
+        num_points=NUM_POINTS,
+        num_sdf_points=NUM_SDF_POINTS,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+        drop_last=False,
+    )
 
-    # Model
+    # Model and optimiser
     model = PointNetPrimitiveModel(num_primitives=NUM_PRIMITIVES).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+    print(f"Starting training on {len(dataset)} shapes")
+    model.train()
+
     for epoch in range(NUM_EPOCHS):
-        model.train()
         epoch_loss = 0.0
         num_batches = 0
 
         for batch in dataloader:
-            # batch: (B, N, 3)
-            batch = batch.to(DEVICE)
+            surf = batch["surf_points"].to(DEVICE).float()     # (B, Ns, 3)
+            sdf_pts = batch["sdf_points"].to(DEVICE).float()   # (B, Nq, 3)
+            sdf_val = batch["sdf_values"].to(DEVICE).float()   # (B, Nq)
 
             optimizer.zero_grad()
 
-            centers, half_sizes = model(batch)  # (B, K, 3), (B, K, 3)
+            centers, half_sizes = model(surf)  # (B,K,3) each
 
-            # Sample predicted points from cuboids
-            pred_points = sample_points_from_cuboids(
-                centers, half_sizes, num_samples_per_shape=NUM_POINTS
-            )  # (B, N, 3)
+            # 1) surface Chamfer loss
+            pred_surf = sample_points_from_cuboids(
+                centers,
+                half_sizes,
+                num_samples_per_shape=surf.shape[1],
+            )
+            loss_ch = chamfer_distance(surf, pred_surf)
 
-            # Chamfer distance between predicted and ground truth
-            loss_recon = chamfer_distance(pred_points, batch)
+            # 2) SDF loss at query points
+            pred_sdf = union_sdf(sdf_pts, centers, half_sizes)  # (B,Nq)
+            loss_sdf = F.mse_loss(pred_sdf, sdf_val)
 
-            # Simple regularization to avoid very large cuboids
-            size_reg = torch.mean(half_sizes)
+            # 3) size regulariser (penalise very large boxes)
+            # sum of squared half-sizes per primitive, averaged over batch
+            size_reg = (half_sizes ** 2).sum(dim=-1).mean()
 
-            loss = loss_recon + 0.0001 * size_reg
+            loss = W_CHAMFER * loss_ch + W_SDF * loss_sdf + W_SIZE * size_reg
 
             loss.backward()
             optimizer.step()
@@ -65,7 +85,11 @@ def train_model():
             num_batches += 1
 
         avg_loss = epoch_loss / max(1, num_batches)
-        print(f"Epoch {epoch + 1}/{NUM_EPOCHS}  Loss: {avg_loss:.6f}")
+        print(
+            f"Epoch {epoch + 1}/{NUM_EPOCHS}  "
+            f"loss={avg_loss:.6f}  "
+            f"(ch={loss_ch.item():.6f}, sdf={loss_sdf.item():.6f}, reg={size_reg.item():.6f})"
+        )
 
     # Save model
     os.makedirs(os.path.dirname(CHECKPOINT_PATH), exist_ok=True)
