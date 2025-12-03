@@ -192,3 +192,50 @@ def cuboids_to_mesh(centers, half_sizes):
     for m in meshes[1:]:
         mesh += m
     return mesh
+
+
+
+
+def cuboid_overlap_loss(centers, half_sizes):
+    """
+    Penalize overlap between axis-aligned cuboids.
+
+    centers: (B, K, 3)
+    half_sizes: (B, K, 3)
+
+    Returns:
+        scalar overlap loss over the batch.
+    """
+    B, K, _ = centers.shape
+
+    # For each pair (i, j) of cuboids in the batch, compute intersection volume.
+    c_i = centers.unsqueeze(2)     # (B, K, 1, 3)
+    c_j = centers.unsqueeze(1)     # (B, 1, K, 3)
+    s_i = half_sizes.unsqueeze(2)  # (B, K, 1, 3)
+    s_j = half_sizes.unsqueeze(1)  # (B, 1, K, 3)
+
+    # Compute min and max corners
+    min_i = c_i - s_i
+    max_i = c_i + s_i
+    min_j = c_j - s_j
+    max_j = c_j + s_j
+
+    # Overlap along each axis
+    overlap_min = torch.maximum(min_i, min_j)   # (B, K, K, 3)
+    overlap_max = torch.minimum(max_i, max_j)   # (B, K, K, 3)
+    overlap_sizes = torch.clamp(overlap_max - overlap_min, min=0.0)  # (B, K, K, 3)
+
+    overlap_vol = (
+        overlap_sizes[..., 0] *
+        overlap_sizes[..., 1] *
+        overlap_sizes[..., 2]
+    )  # (B, K, K)
+
+    # Remove self-overlap along diagonal
+    eye = torch.eye(K, device=centers.device).view(1, K, K)
+    overlap_vol = overlap_vol * (1.0 - eye)
+
+    # Average overlap volume per pair, then average over batch
+    num_pairs = max(1, K * (K - 1))
+    loss_per_sample = overlap_vol.sum(dim=(1, 2)) / num_pairs  # (B,)
+    return loss_per_sample.mean()

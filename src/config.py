@@ -26,7 +26,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Loss weights
 W_CHAMFER = 0.1
-W_SDF = 0.1
+W_SDF = 1
 W_SIZE = 0.01 # size regularizer on half_sizes
 
 # Random seed for reproducibility
