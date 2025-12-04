@@ -386,3 +386,90 @@ def compute_coverage_loss(points, centers, half_sizes):
     coverage_loss = 1.0 - torch.mean(covered.float())
 
     return coverage_loss
+
+
+
+def cuboid_union_sdf(points, centers, half_sizes):
+    """
+    Approximate signed distance from points to the union of axis-aligned cuboids.
+
+    Args:
+        points:     (B, N, 3) query points
+        centers:    (B, K, 3) cuboid centers
+        half_sizes: (B, K, 3) cuboid half-sizes (positive)
+
+    Returns:
+        sdf:        (B, N) signed distance to union of cuboids
+                    negative inside union, positive outside
+    """
+    # Expand for pairwise distances: (B, N, 1, 3) - (B, 1, K, 3) -> (B, N, K, 3)
+    p_rel = points.unsqueeze(2) - centers.unsqueeze(1)          # (B, N, K, 3)
+    q = torch.abs(p_rel) - half_sizes.unsqueeze(1)              # (B, N, K, 3)
+
+    # Outside distance: distance to nearest point on box when outside
+    outside = torch.clamp(q, min=0.0)                           # (B, N, K, 3)
+    outside_dist = outside.norm(dim=-1)                         # (B, N, K)
+
+    # Inside term: if all components of q are <= 0, we're inside the box
+    # max over axes is <= 0, and we take the maximum as "how deep" we are.
+    inside = torch.clamp(q.max(dim=-1).values, max=0.0)         # (B, N, K)
+
+    # Standard box SDF formula
+    sdf_per_box = outside_dist + inside                         # (B, N, K)
+
+    # Union of boxes => minimum SDF over K
+    sdf_union, _ = sdf_per_box.min(dim=-1)                      # (B, N)
+
+    return sdf_union
+
+
+def sdf_volume_loss(centers, half_sizes,
+                    sdf_points, sdf_values,
+                    num_samples=20000):
+    """
+    Enforce that the union of cuboids matches the ground-truth SDF sign.
+
+    Args:
+        centers:     (B, K, 3)
+        half_sizes:  (B, K, 3)
+        sdf_points:  (P, 3) all precomputed SDF sample points (on DEVICE)
+        sdf_values:  (P,)   their signed distances (negative inside shape)
+        num_samples: number of SDF points to subsample per iteration
+
+    Returns:
+        loss: scalar tensor
+    """
+    device = centers.device
+    B, K, _ = centers.shape
+
+    P = sdf_points.shape[0]
+    num_samples = min(num_samples, P)
+
+    # Random subset of SDF samples
+    idx = torch.randint(0, P, (num_samples,), device=device)
+    pts = sdf_points[idx]           # (M, 3)
+    gt = sdf_values[idx]           # (M,)
+
+    # Duplicate points for each batch element
+    pts_batch = pts.unsqueeze(0).expand(B, -1, -1)   # (B, M, 3)
+    gt_batch = gt.unsqueeze(0).expand(B, -1)         # (B, M)
+
+    # Predicted SDF from cuboids
+    pred_sdf = cuboid_union_sdf(pts_batch, centers, half_sizes)  # (B, M)
+
+    # We care mostly about the sign consistency:
+    #   - For ground truth inside (gt < 0), we want pred_sdf <= 0
+    #   - For ground truth outside (gt > 0), we want pred_sdf >= 0
+    inside_mask = gt_batch < 0
+    outside_mask = gt_batch > 0
+
+    # Hinge-style penalties
+    inside_loss = torch.relu(pred_sdf[inside_mask])**2           # push <= 0
+    outside_loss = torch.relu(-pred_sdf[outside_mask])**2        # push >= 0
+
+    # (Optional) extra weight near the true surface if you like:
+    # near_surface = (gt_batch.abs() < 0.02)
+    # surface_loss = (pred_sdf[near_surface].abs())**2
+
+    loss = inside_loss.mean() + outside_loss.mean()
+    return loss
