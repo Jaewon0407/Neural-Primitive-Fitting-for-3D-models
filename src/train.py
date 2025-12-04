@@ -22,7 +22,7 @@ from config import (
 )
 from dataset import ShapePrimitiveDataset
 from model import PointNetPrimitiveModel
-from utils import box_sdf, chamfer_distance, cuboid_overlap_loss, sample_points_from_cuboids, union_sdf
+from utils import box_sdf, chamfer_distance, compute_coverage_loss, compute_overlap_penalty, cuboid_overlap_loss, sample_points_from_cuboids, union_sdf
 
 
 def train_model():
@@ -74,44 +74,49 @@ def train_model():
             loss_sdf = F.mse_loss(pred_sdf, gt_sdf)
 
 
-            margin = 0.01  # small safety margin around zero, same order as eps
+            # margin = 0.01  # small safety margin around zero, same order as eps
 
-            inside_mask  = gt_sdf < -margin
-            outside_mask = gt_sdf >  margin
+            # inside_mask  = gt_sdf < -margin
+            # outside_mask = gt_sdf >  margin
 
-            # Overflow: GT outside (>0) but pred says inside (<0)
-            # want pred_sdf >= +margin there
-            overflow = torch.relu(margin - pred_sdf[outside_mask])  # (..,)
-            loss_overflow = overflow.mean() if overflow.numel() > 0 else 0.0
+            # # Overflow: GT outside (>0) but pred says inside (<0)
+            # # want pred_sdf >= +margin there
+            # overflow = torch.relu(margin - pred_sdf[outside_mask])  # (..,)
+            # loss_overflow = overflow.mean() if overflow.numel() > 0 else 0.0
 
-            # Underfill: GT inside (<0) but pred says outside (>0)
-            # want pred_sdf <= -margin there
-            underfill = torch.relu(pred_sdf[inside_mask] + margin)
-            loss_underfill = underfill.mean() if underfill.numel() > 0 else 0.0
+            # # Underfill: GT inside (<0) but pred says outside (>0)
+            # # want pred_sdf <= -margin there
+            # underfill = torch.relu(pred_sdf[inside_mask] + margin)
+            # loss_underfill = underfill.mean() if underfill.numel() > 0 else 0.0
 
-            # d_all: (B, Nq, K) from box_sdf
-            d_all = box_sdf(sdf_pts, centers, half_sizes)
-            pred_sdf, owners = d_all.min(dim=-1)  # (B,Nq), (B,Nq) indices of responsible cube
+            # # d_all: (B, Nq, K) from box_sdf
+            # d_all = box_sdf(sdf_pts, centers, half_sizes)
+            # pred_sdf, owners = d_all.min(dim=-1)  # (B,Nq), (B,Nq) indices of responsible cube
 
-            # per-primitive responsibility: fraction of points where this cube is the closest
-            B, Nq = owners.shape
-            K = centers.shape[1]
-            resp = []
-            for k in range(K):
-                resp_k = (owners == k).float().mean()  # fraction of samples "owned" by cube k
-                resp.append(resp_k)
-            resp = torch.stack(resp)  # (K,)
+            # # per-primitive responsibility: fraction of points where this cube is the closest
+            # B, Nq = owners.shape
+            # K = centers.shape[1]
+            # resp = []
+            # for k in range(K):
+            #     resp_k = (owners == k).float().mean()  # fraction of samples "owned" by cube k
+            #     resp.append(resp_k)
+            # resp = torch.stack(resp)  # (K,)
             
-            # encourage more even responsibility; large resp_k means cube k covers too much
-            dominance_reg = (resp ** 2).sum()  # big if one cube dominates
+            # # encourage more even responsibility; large resp_k means cube k covers too much
+            # dominance_reg = (resp ** 2).sum()  # big if one cube dominates
 
-            loss_overlap = cuboid_overlap_loss(centers, half_sizes)
+            # loss_overlap = cuboid_overlap_loss(centers, half_sizes)
 
             # 3) size regulariser (penalise very large boxes)
             # sum of squared half-sizes per primitive, averaged over batch
-            size_reg = (half_sizes ** 2).sum(dim=-1).mean()
+            # size_reg = (half_sizes ** 2).sum(dim=-1).mean()
 
-            loss = W_CHAMFER * loss_ch + 0.01 * loss_overlap +W_SDF * loss_sdf + 10 * loss_overflow + 0.001 * loss_underfill + W_SIZE * size_reg + 0.1 * dominance_reg
+
+            overlap = compute_overlap_penalty(centers, half_sizes)
+
+            coverage_loss = compute_coverage_loss(pred_surf, centers, half_sizes)
+
+            loss = W_CHAMFER * loss_ch + 0.01 * loss_sdf + 0.0001 * overlap + 0.2 * coverage_loss  #+ 10 * loss_overflow + 0.001 * loss_underfill + W_SIZE * size_reg + 0.1 * dominance_reg
 
             loss.backward()
             optimizer.step()
@@ -123,7 +128,7 @@ def train_model():
         print(
             f"Epoch {epoch + 1}/{NUM_EPOCHS}  "
             f"loss={avg_loss:.6f}  "
-            f"(ch={loss_ch.item():.6f}, sdf={loss_sdf.item():.6f}, reg={size_reg.item():.6f})"
+            # f"(ch={loss_ch.item():.6f}, sdf={loss_sdf.item():.6f}, reg={size_reg.item():.6f})"
         )
 
     # Save model

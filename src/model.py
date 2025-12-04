@@ -7,11 +7,12 @@ from config import FEATURE_DIM, NUM_PRIMITIVES
 class PointNetEncoder(nn.Module):
     def __init__(self, input_dim=3, feature_dim=FEATURE_DIM):
         super().__init__()
-        self.mlp1 = nn.Linear(input_dim, 64)
-        self.mlp2 = nn.Linear(64, 128)
-        self.mlp3 = nn.Linear(128, 256)
-        self.mlp4 = nn.Linear(256, 512)
-        self.mlp5 = nn.Linear(512, feature_dim)
+
+        self.mlp1 = nn.Linear(input_dim, 128)
+        self.mlp2 = nn.Linear(128, 256)
+        self.mlp3 = nn.Linear(256, 512)
+        self.mlp4 = nn.Linear(512, 1024)
+        self.mlp5 = nn.Linear(1024, feature_dim)
 
         self.relu = nn.ReLU()
 
@@ -47,9 +48,9 @@ class PrimitiveDecoder(nn.Module):
         self.param_dim_per_prim = 6
         out_dim = num_primitives * self.param_dim_per_prim
 
-        self.fc1 = nn.Linear(feature_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, out_dim)
+        self.fc1 = nn.Linear(feature_dim, 512)
+        self.fc2 = nn.Linear(512, 512)
+        self.fc3 = nn.Linear(512, out_dim)
 
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
@@ -72,10 +73,10 @@ class PrimitiveDecoder(nn.Module):
         raw_sizes = x[:, :, 3:6]                # (B, K, 3)
         # half_sizes = self.softplus(raw_sizes) + 0.02  # avoid tiny sizes
 
-        min_size = 0.005
-        max_size = 0.5
+        base_size = 0.01
+        half_sizes = base_size * torch.exp(torch.clamp(raw_sizes, -3, 3))
 
-        half_sizes = min_size + max_size * torch.sigmoid(raw_sizes)
+        # half_sizes = min_size + max_size * torch.sigmoid(raw_sizes)
 
         return centers, half_sizes
 

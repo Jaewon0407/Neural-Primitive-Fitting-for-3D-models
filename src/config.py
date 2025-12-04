@@ -15,13 +15,13 @@ NUM_SDF_POINTS = 8192        # SDF query samples per shape
 SDF_FILENAME = "sdf.npz"     # file inside each shape dir with "points" and "values"
 
 # Model
-FEATURE_DIM = 128
+FEATURE_DIM = 512
 NUM_PRIMITIVES = 32          # number of cuboids per shape
 
 # Training
 BATCH_SIZE = 1
 NUM_EPOCHS = 250
-LEARNING_RATE = 5e-4
+LEARNING_RATE = 5e-3
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Loss weights
