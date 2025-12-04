@@ -67,6 +67,63 @@ def sample_points_from_cuboids(centers, half_sizes, num_samples_per_shape=NUM_PO
 
     return pts
 
+def compute_overlap_penalty(centers, half_sizes):
+    """
+    Differentiable overlap penalty for axis-aligned cuboids.
+
+    centers:    (B, K, 3)
+    half_sizes: (B, K, 3)
+
+    Returns:
+        overlappenalty: scalar tensor
+    """
+    B, K,_  = centers.shape
+    if K <= 1:
+        return torch.tensor(0.0, device=centers.device)
+
+    # Expand to pairwise (B, K, K, 3)
+    c_i = centers.unsqueeze(2)
+    c_j = centers.unsqueeze(1)
+    s_i = half_sizes.unsqueeze(2)
+    s_j = half_sizes.unsqueeze(1)
+
+    # Bounding box min and max
+    min_i = c_i - s_i    # (B, K, K, 3)
+    max_i = c_i + s_i
+    min_j = c_j - s_j
+    max_j = c_j + s_j
+
+    # Intersection edges
+    inter_min = torch.max(min_i, min_j)
+    inter_max = torch.min(max_i, max_j)
+
+    # Intersection side lengths (clamped at zero)
+    inter_sizes = torch.clamp(inter_max - inter_min, min=0.0)  # (B, K, K, 3)
+
+    # Intersection volume
+    inter_vol = torch.prod(inter_sizes, dim=-1)  # (B, K, K)
+
+    # Compute volumes
+    vol_i = torch.prod(2 * s_i, dim=-1)  # (B, K, K)
+    vol_j = torch.prod(2 * s_j, dim=-1)
+
+    # Union volume
+    union = vol_i + vol_j - inter_vol + 1e-8
+
+    # IoU-style overlap
+    overlap = inter_vol / union  # (B, K, K)
+
+    # Only keep upper triangular (no self, no double counting)
+    mask = torch.triu(torch.ones(K, K, device=centers.device), diagonal=1).bool()
+    mask = mask.unsqueeze(0)   # (1, K, K)
+
+    overlap_pairs = overlap[mask]  # all valid pairs across batch
+
+    if overlap_pairs.numel() == 0:
+        return torch.tensor(0.0, device=centers.device)
+
+    return overlap_pairs.mean()
+
 # def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
 #     device = centers.device
 #     B, K, _ = centers.shape
@@ -279,3 +336,53 @@ def cuboids_to_mesh(centers, half_sizes):
         combined += m
 
     return combined
+
+
+
+def point_in_cuboid(points, centers, half_sizes):
+    """
+    Vectorized version - Check if points are inside cuboids.
+
+    Args:
+        points: (B, N, 3) - input points
+        centers: (B, K, 3) - cuboid centers
+        half_sizes: (B, K, 3) - cuboid half sizes
+
+    Returns:
+        inside: (B, N, K) - boolean tensor indicating if point n is inside cuboid k
+    """
+
+    # Expand dimensions for broadcasting
+    points_expanded = points.unsqueeze(2)          # (B, N, 1, 3)
+    centers_expanded = centers.unsqueeze(1)        # (B, 1, K, 3)
+    half_sizes_expanded = half_sizes.unsqueeze(1)  # (B, 1, K, 3)
+
+    # Check if points are within cuboid bounds
+    diff = torch.abs(points_expanded - centers_expanded)  # (B, N, K, 3)
+    inside = torch.all(diff <= half_sizes_expanded, dim=-1)  # (B, N, K)
+
+    return inside
+
+
+def compute_coverage_loss(points, centers, half_sizes):
+    """
+    Vectorized coverage loss - encourages primitives to cover all input points.
+
+    Args:
+        points: (B, N, 3) - input points
+        centers: (B, K, 3) - predicted cuboid centers
+        half_sizes: (B, K, 3) - predicted cuboid half sizes
+
+    Returns:
+        coverage_loss: scalar tensor
+    """
+
+    inside = point_in_cuboid(points, centers, half_sizes)  # (B, N, K)
+
+    # For each point, check if it's covered by at least one cuboid
+    covered = torch.any(inside, dim=-1)  # (B, N)
+
+    # Coverage loss = fraction of points not covered
+    coverage_loss = 1.0 - torch.mean(covered.float())
+
+    return coverage_loss
