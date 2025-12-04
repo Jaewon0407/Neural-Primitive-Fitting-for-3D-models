@@ -28,7 +28,6 @@ def chamfer_distance(pcd1, pcd2):
     loss = torch.mean(min_dist1) + torch.mean(min_dist2)
     return loss
 
-
 def sample_points_from_cuboids(centers, half_sizes, num_samples_per_shape=NUM_POINTS):
     """
     Differentiable sampling of points inside cuboids.
@@ -124,82 +123,6 @@ def compute_overlap_penalty(centers, half_sizes):
 
     return overlap_pairs.mean()
 
-# def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
-#     device = centers.device
-#     B, K, _ = centers.shape
-#     samples_per_prim = max(1, num_samples_per_shape // K)
-
-#     all_pts = []
-
-#     for b in range(B):
-#         c = centers[b]      # (K, 3)
-#         s = half_sizes[b]   # (K, 3)
-
-#         pts_list = []
-#         for k in range(K):
-#             ck = c[k]   # (3,)
-#             sk = s[k]   # (3,)
-
-#             # random faces: 0..5
-#             face_ids = torch.randint(0, 6, (samples_per_prim,), device=device)
-
-#             u = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[0]
-#             v = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[1]
-#             w = (2 * torch.rand(samples_per_prim, device=device) - 1) * sk[2]
-
-#             x = torch.zeros(samples_per_prim, device=device)
-#             y = torch.zeros(samples_per_prim, device=device)
-#             z = torch.zeros(samples_per_prim, device=device)
-
-#             # assign coordinates based on face
-#             # +x / -x
-#             mask = face_ids == 0
-#             x[mask] = sk[0]
-#             y[mask] = v[mask]
-#             z[mask] = w[mask]
-
-#             mask = face_ids == 1
-#             x[mask] = -sk[0]
-#             y[mask] = v[mask]
-#             z[mask] = w[mask]
-
-#             # +y / -y
-#             mask = face_ids == 2
-#             x[mask] = u[mask]
-#             y[mask] = sk[1]
-#             z[mask] = w[mask]
-
-#             mask = face_ids == 3
-#             x[mask] = u[mask]
-#             y[mask] = -sk[1]
-#             z[mask] = w[mask]
-
-#             # +z / -z
-#             mask = face_ids == 4
-#             x[mask] = u[mask]
-#             y[mask] = v[mask]
-#             z[mask] = sk[2]
-
-#             mask = face_ids == 5
-#             x[mask] = u[mask]
-#             y[mask] = v[mask]
-#             z[mask] = -sk[2]
-
-#             pts = torch.stack([x, y, z], dim=-1) + ck  # (S, 3)
-#             pts_list.append(pts)
-
-#         pts_cat = torch.cat(pts_list, dim=0)  # (K*S, 3)
-#         if pts_cat.shape[0] >= num_samples_per_shape:
-#             pts_cat = pts_cat[:num_samples_per_shape]
-#         else:
-#             reps = (num_samples_per_shape + pts_cat.shape[0] - 1) // pts_cat.shape[0]
-#             pts_cat = pts_cat.repeat(reps, 1)[:num_samples_per_shape]
-#         all_pts.append(pts_cat)
-
-#     all_pts = torch.stack(all_pts, dim=0)  # (B, N, 3)
-#     return all_pts
-
-##version2
 def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shape):
     """
     centers:    (B, K, 3)
@@ -299,7 +222,6 @@ def sample_points_from_cuboids_surface(centers, half_sizes, num_samples_per_shap
 
     return pts
 
-
 def cuboids_to_mesh(centers, half_sizes):
     """
     centers: (K, 3) numpy
@@ -337,8 +259,6 @@ def cuboids_to_mesh(centers, half_sizes):
 
     return combined
 
-
-
 def point_in_cuboid(points, centers, half_sizes):
     """
     Vectorized version - Check if points are inside cuboids.
@@ -362,7 +282,6 @@ def point_in_cuboid(points, centers, half_sizes):
     inside = torch.all(diff <= half_sizes_expanded, dim=-1)  # (B, N, K)
 
     return inside
-
 
 def compute_coverage_loss(points, centers, half_sizes):
     """
