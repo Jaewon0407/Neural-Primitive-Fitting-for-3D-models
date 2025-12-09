@@ -20,7 +20,7 @@ from dataset import ShapePrimitiveDataset
 from model import PointNetPrimitiveModel
 from utils import chamfer_distance, compute_coverage_loss, compute_overlap_penalty, sample_points_from_cuboids_surface, sdf_volume_loss
 lambda_cov = 0.1      # example, keep small if coverage is already good
-lambda_sdf = 0.5      # start small; you can tune this
+lambda_sdf = 0.1      # start small; you can tune this
 
 
 def train_model():

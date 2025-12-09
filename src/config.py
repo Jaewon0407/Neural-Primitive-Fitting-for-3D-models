@@ -13,7 +13,7 @@ OUTPUT_DIR = "outputs"
 NUM_POINTS = 4096            # number of points sampled per shape
 
 # Model
-NUM_PRIMITIVES = 20           # number of cuboids per shape
+NUM_PRIMITIVES = 32           # number of cuboids per shape
 FEATURE_DIM = 512            # PointNet global feature size
 
 # Training
