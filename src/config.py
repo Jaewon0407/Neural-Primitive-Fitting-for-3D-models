@@ -18,7 +18,7 @@ FEATURE_DIM = 512            # PointNet global feature size
 
 # Training
 BATCH_SIZE = 1
-NUM_EPOCHS = 500
+NUM_EPOCHS = 2500
 LEARNING_RATE = 5e-3
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
