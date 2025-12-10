@@ -72,14 +72,6 @@ class PrimitiveDecoder(nn.Module):
         raw_sizes = x[:, :, 3:6]                # (B, K, 3)
         half_sizes = self.softplus(raw_sizes) + 0.06  # avoid tiny sizes
 
-        # base_size = 0.01
-        # half_sizes = base_size * torch.exp(torch.clamp(raw_sizes, -3, 3))
-
-        # min_size = 0.005
-        # max_size = 0.5
-
-        # half_sizes = min_size + max_size * torch.sigmoid(raw_sizes)
-
         return centers, half_sizes
 
 
