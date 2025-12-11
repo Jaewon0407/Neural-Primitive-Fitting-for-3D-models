@@ -19,8 +19,6 @@ from config import (
 from dataset import ShapePrimitiveDataset
 from model import PointNetPrimitiveModel
 from utils import chamfer_distance, compute_coverage_loss, compute_overlap_penalty, sample_points_from_cuboids_surface, sdf_volume_loss
-lambda_cov = 1      # example, keep small if coverage is already good
-lambda_sdf = 1      # start small; you can tune this
 
 
 def train_model():
@@ -31,7 +29,7 @@ def train_model():
                             shuffle=True,
                             drop_last=True)
     
-     # Load SDF data (single shape case)
+    # Load SDF data (single shape case)
     # Automatically find the first subfolder inside data/
     subdirs = [d for d in os.listdir(DATA_ROOT)
             if os.path.isdir(os.path.join(DATA_ROOT, d))]
@@ -92,7 +90,7 @@ def train_model():
             # Simple regularization to avoid very large cuboids
             size_reg = torch.mean(half_sizes**2)
 
-            loss = loss_recon + 0.0001 * size_reg + 0.5 * overlap + 0.2 * coverage_loss + lambda_sdf * sdf_loss_val
+            loss = loss_recon + 0.0001 * size_reg + 0.5 * overlap + 0.2 * coverage_loss + 1.0 * sdf_loss_val
 
             loss.backward()
             optimizer.step()
